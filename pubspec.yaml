@@ -1,6 +1,6 @@
 name: super_logging
 description: The usual dart logging module with superpowers!
-version: 0.0.1
+version: 0.0.2
 author: Dev Aggarwal <devpxy@gmail.com>
 homepage: https://github.com/pycampers/super_logging
 

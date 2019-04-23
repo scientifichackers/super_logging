@@ -33,14 +33,25 @@ class SuperLogging {
   static final instance = SuperLogging._internal();
 
   Future<Map<String, String>> getDeviceInfo() async {
-    var info = await DeviceInfoPlugin().androidInfo;
-    return {
-      "manufacturer": info.manufacturer,
-      "model": info.model,
-      "product": info.product,
-      "androidVersion": info.version.release,
-      "supportedAbis": info.supportedAbis.toString(),
-    };
+    if (Platform.isAndroid) {
+      final info = await DeviceInfoPlugin().androidInfo;
+      return {
+        "manufacturer": info.manufacturer,
+        "model": info.model,
+        "product": info.product,
+        "androidVersion": info.version.release,
+        "supportedAbis": info.supportedAbis.toString(),
+      };
+    } else if (Platform.isIOS) {
+      final info = await DeviceInfoPlugin().iosInfo;
+      return {
+        "name": info.name,
+        "model": info.model,
+        "systemName": info.systemName,
+        "systemVersion": info.systemVersion,
+      };
+    }
+    return {};
   }
 
   Future<File> createLogFile(String logFileDir, int maxLogFiles) async {
