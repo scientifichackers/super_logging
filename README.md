@@ -75,6 +75,7 @@ Yes! just do the following, along with `SuperLogger.init()`
 
 ```dart
 import 'package:super_logging/super_logging.dart';
+import 'package:logging/logging.dart';
 
 final _logger = Logger("main");
 
