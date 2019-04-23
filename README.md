@@ -78,6 +78,8 @@ import 'package:super_logging/super_logging.dart';
 final _logger = Logger("main");
 
 main() async {
+  await SuperLogging.init();
+
   // catch all errors from flutter
   FlutterError.onError = (errorDetails) {
     _logger.fine(
