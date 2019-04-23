@@ -16,11 +16,13 @@ This will log to
 ```dart
 import 'package:super_logging/super_logging.dart';
 
+final _logger = Logger("main");
+
 main() async {
+  // you must initalize before using the logger!
   await SuperLogging.init();
   
-  final myLogger = Logger("main");
-  myLogger.info("hello!");
+  _logger.info("hello!");
 }
 ```
 
@@ -30,7 +32,7 @@ This will log to stdout by default. Use may also choose to :-
 
 This module can upload errors to sentry.io if you want.
 
-(Errors can be logged by passing errors like so: `myLogger.fine(msg, e, trace);`)
+(Errors can be logged by passing errors like so: `_logger.fine(msg, e, trace);`)
 
 ```dart
 await SuperLogging.init(
@@ -65,3 +67,31 @@ await SuperLogging.init(
   int maxLogFiles: 10,
 )
 ```
+
+## Can I log uncaught errors?
+
+Yes! just do the following, along with `SuperLogger.init()`
+
+```dart
+import 'package:super_logging/super_logging.dart';
+
+final _logger = Logger("main");
+
+main() async {
+  // catch all errors from flutter
+  FlutterError.onError = (errorDetails) {
+    _logger.fine(
+      "error caught inside `FlutterError.onError()`",
+      errorDetails.exception,
+      errorDetails.stack,
+    );
+  };
+
+  runZoned(() {
+    runApp(Main());  // `Main` is the root widget
+  }, onError: (e, trace) {
+    _logger.fine("error caught inside `main()` run zone", e, trace);
+  }); 
+}
+```
+
