@@ -14,13 +14,14 @@ This will log to
 ## How do I use this?
 
 ```dart
-import 'package:super_logging/super_logging.dart';
+import 'package:super_logging/super_logging.dart';  // you only need this import for initialize
+import 'package:logging/logging.dart';  // this is the regular dart module
 
 final _logger = Logger("main");
 
 main() async {
   // you must initalize before using the logger!
-  await SuperLogging.init();
+  await SuperLogging.instance.init();
   
   _logger.info("hello!");
 }
@@ -78,7 +79,7 @@ import 'package:super_logging/super_logging.dart';
 final _logger = Logger("main");
 
 main() async {
-  await SuperLogging.init();
+  await SuperLogging.instance.init();
 
   // catch all errors from flutter
   FlutterError.onError = (errorDetails) {
