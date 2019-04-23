@@ -2,6 +2,10 @@
 
 The usual dart logging module with superpowers!
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-jaaga_labs-red.svg?style=for-the-badge)](https://www.jaaga.in/labs)
+
+[![pub package](https://img.shields.io/pub/v/super_logging.svg?style=for-the-badge)](https://pub.dartlang.org/packages/super_logging)
+
 This will log to
 - stdout
 - disk
