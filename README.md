@@ -25,7 +25,7 @@ This will log to stdout by default. Use may also choose to :-
 
 ### Use sentry.io
 
-This module can upload errors to sentry.io if you want.
+This module can upload errors (eg: `Logging.fine(msg, e, trace);`) to sentry.io if you want.
 
 ```dart
 await SuperLogging.init(
