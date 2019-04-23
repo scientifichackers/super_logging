@@ -21,7 +21,9 @@ main() async {
 }
 ```
 
-### use sentry.io
+This will log to stdout by default. Use may also choose to :-
+
+### Use sentry.io
 
 This module can upload errors to sentry.io if you want.
 
@@ -44,7 +46,7 @@ await SuperLogging.init(
 )
 ```
 
-## use the disk
+### Use the disk
 
 ```dart
 await SuperLogging.init(
