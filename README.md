@@ -32,6 +32,7 @@ await SuperLogging.init(
 
   // [optional] Has auto retry of uploads built right in!
   sentryAutoRetryDelay: Duration(seconds: 5),
+  
   // [optional] Get current user info, which will be sent to sentry.
   // This appears in their web gui.
   getCurrentUser: (deviceInfo) {

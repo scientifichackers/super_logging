@@ -1,8 +1,8 @@
 name: super_logging
-description: The usual logging module with superpowers!
+description: The usual dart logging module with superpowers!
 version: 0.0.1
-author:
-homepage:
+author: Dev Aggarwal <devpxy@gmail.com>
+homepage: https://github.com/pycampers/super_logging
 
 environment:
   sdk: ">=2.1.0 <3.0.0"
@@ -16,6 +16,7 @@ dependencies:
   logging: ^0.11.3+2
   sentry: ^2.2.0
   intl: ^0.15.8
+  path: ^1.6.2
 
 dev_dependencies:
   flutter_test:
