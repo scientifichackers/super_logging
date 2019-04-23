@@ -18,6 +18,9 @@ import 'package:super_logging/super_logging.dart';
 
 main() async {
   await SuperLogging.init();
+  
+  final myLogger = Logger("main");
+  myLogger.info("hello!");
 }
 ```
 
@@ -25,7 +28,9 @@ This will log to stdout by default. Use may also choose to :-
 
 ### Use sentry.io
 
-This module can upload errors (eg: `Logging.fine(msg, e, trace);`) to sentry.io if you want.
+This module can upload errors to sentry.io if you want.
+
+(Errors can be logged by passing errors like so: `myLogger.fine(msg, e, trace);`)
 
 ```dart
 await SuperLogging.init(
