@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:device_info/device_info.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
 import 'package:package_info/package_info.dart';
@@ -102,14 +101,18 @@ class SuperLogging {
     }
   }
 
-  Future<void> _handleRec(LogRecord rec, GetCurrentUser getCurrentUser) async {
+  Future<void> _handleRec(
+    LogRecord rec,
+    GetCurrentUser getCurrentUser,
+    bool sentryEnabled,
+  ) async {
     var asStr = "[${rec.loggerName}] [${rec.level}] [${rec.time.toString()}] "
         "${rec.message}";
 
     if (rec.error != null) asStr += "\n${rec.error}\n${rec.stackTrace}\n";
 
     // write to stdout
-    debugPrint(asStr);
+    print(asStr);
 
     // write to logfile
     await logFile?.writeAsString(
@@ -119,8 +122,8 @@ class SuperLogging {
     );
 
     // add error to sentry queue
-    if (rec.error != null) {
-      final user = await getCurrentUser(deviceInfo);
+    if (sentryEnabled && rec.error != null) {
+      final user = await getCurrentUser?.call(deviceInfo);
       _sentryQueueController.add(
         Event(
           release: appVersion,
@@ -161,7 +164,7 @@ class SuperLogging {
     Logger.root.level = Level.ALL;
     () async {
       await for (var rec in Logger.root.onRecord) {
-        await _handleRec(rec, getCurrentUser);
+        await _handleRec(rec, getCurrentUser, sentryDsn != null);
       }
     }();
   }
