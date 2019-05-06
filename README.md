@@ -21,7 +21,7 @@ final _logger = Logger("main");
 
 main() async {
   // you must initalize before using the logger!
-  await SuperLogging.instance.init();
+  await SuperLogging.init();
   
   _logger.info("hello!");
 }
