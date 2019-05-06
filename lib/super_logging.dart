@@ -13,25 +13,20 @@ import 'package:sentry/sentry.dart';
 export 'package:sentry/sentry.dart' show User;
 
 final _dateFmt = DateFormat("y-M-d");
+final _sentryQueueController = StreamController<Event>();
 
 typedef Future<User> GetCurrentUser(Map<String, String> deviceInfo);
 
 void _log(String msg) {
-  print("[logging_plus] $msg");
+  print("[super_logging] $msg");
 }
 
 class SuperLogging {
-  Map<String, String> deviceInfo;
-  String appVersion;
-  File logFile;
+  static Map<String, String> deviceInfo;
+  static String appVersion;
+  static File logFile;
 
-  final _sentryQueueController = StreamController<Event>();
-
-  SuperLogging._internal();
-
-  static final instance = SuperLogging._internal();
-
-  Future<Map<String, String>> getDeviceInfo() async {
+  static Future<Map<String, String>> getDeviceInfo() async {
     if (Platform.isAndroid) {
       final info = await DeviceInfoPlugin().androidInfo;
       return {
@@ -53,12 +48,13 @@ class SuperLogging {
     return {};
   }
 
-  Future<File> createLogFile(String logFileDir, int maxLogFiles) async {
-    final dir = Directory(logFileDir),
-        logFile = File("$logFileDir/${_dateFmt.format(DateTime.now())}"),
-        files = <File>[];
+  static Future<File> createLogFile(String logFileDir, int maxLogFiles) async {
+    final dir = Directory(logFileDir);
+    await dir.create(recursive: true);
+    final logFile = File("$logFileDir/${_dateFmt.format(DateTime.now())}");
+    final files = <File>[];
 
-    for (var file in await dir.list().toList()) {
+    for (final file in await dir.list().toList()) {
       try {
         _dateFmt.parse(pathlib.basename(file.path));
       } on FormatException catch (_) {
@@ -80,11 +76,11 @@ class SuperLogging {
     return logFile;
   }
 
-  Future<void> _sentryUploadLoop(
+  static Future<void> _sentryUploadLoop(
     SentryClient sentry,
     Duration sentryAutoRetryDelay,
   ) async {
-    await for (var event in _sentryQueueController.stream) {
+    await for (final event in _sentryQueueController.stream) {
       SentryResponse response;
       try {
         response = await sentry.capture(event: event);
@@ -101,7 +97,7 @@ class SuperLogging {
     }
   }
 
-  Future<void> _handleRec(
+  static Future<void> _handleRec(
     LogRecord rec,
     GetCurrentUser getCurrentUser,
     bool sentryEnabled,
@@ -138,34 +134,52 @@ class SuperLogging {
     }
   }
 
-  Future<void> init({
+  static Future<void> _mainloop(
+    GetCurrentUser getCurrentUser,
+    bool sentryEnabled,
+  ) async {
+    Logger.root.level = Level.ALL;
+    await for (final rec in Logger.root.onRecord) {
+      await _handleRec(rec, getCurrentUser, sentryEnabled);
+    }
+  }
+
+  static bool get isInDebugMode {
+    var value = false;
+    assert(value = true);
+    return value;
+  }
+
+  static Future<void> init({
     String sentryDsn,
     Duration sentryAutoRetryDelay: const Duration(seconds: 10),
     GetCurrentUser getCurrentUser,
     String logFileDir,
     int maxLogFiles: 10,
+    bool considerDebugMode: false,
   }) async {
+    final shouldDisable = considerDebugMode && isInDebugMode;
+    if (shouldDisable) {
+      _log("detected debug mode; sentry & file logging will be disabled!");
+    }
+
     appVersion = (await PackageInfo.fromPlatform()).version;
     _log("appVersion: $appVersion");
 
     deviceInfo = await getDeviceInfo();
     _log("deviceInfo: $deviceInfo");
 
-    if (logFileDir != null) {
+    if (!shouldDisable && logFileDir != null) {
       logFile = await createLogFile(logFileDir, maxLogFiles);
       _log("log file for this session: $logFile");
     }
 
-    if (sentryDsn != null) {
+    if (!shouldDisable && sentryDsn != null) {
       _sentryUploadLoop(SentryClient(dsn: sentryDsn), sentryAutoRetryDelay);
-      _log("sentry uploader initialized.");
+      _log("sentry uploader initialized");
     }
 
-    Logger.root.level = Level.ALL;
-    () async {
-      await for (var rec in Logger.root.onRecord) {
-        await _handleRec(rec, getCurrentUser, sentryDsn != null);
-      }
-    }();
+    _mainloop(getCurrentUser, sentryDsn != null);
+    _log("mainloop started");
   }
 }

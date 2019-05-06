@@ -51,6 +51,9 @@ await SuperLogging.init(
       extras: deviceInfo,  // contains valuable info like device manufacturer, model etc.
     )
   },
+  
+  // [optional] automatically turn off sentry/file logging during debug mode.
+  bool considerDebugMode: true,
 )
 ```
 
