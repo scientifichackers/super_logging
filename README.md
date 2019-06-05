@@ -74,7 +74,10 @@ await SuperLogging.init(
 
 ## Can I log uncaught errors?
 
-Yes! just do the following, along with `SuperLogger.init()`
+Yes!
+
+If you pass a function to the `run` argument,
+super logging will register hooks for `FlutterError.onError` and use `runZoned()` to catch un-caught errors.
 
 ```dart
 import 'package:super_logging/super_logging.dart';
@@ -83,22 +86,12 @@ import 'package:logging/logging.dart';
 final _logger = Logger("main");
 
 main() async {
-  await SuperLogging.init();
-
-  // catch all errors from flutter
-  FlutterError.onError = (errorDetails) {
-    _logger.fine(
-      "error caught inside `FlutterError.onError()`",
-      errorDetails.exception,
-      errorDetails.stack,
-    );
-  };
-
-  runZoned(() {
-    runApp(Main());  // `Main` is the root widget
-  }, onError: (e, trace) {
-    _logger.fine("error caught inside `main()` run zone", e, trace);
-  }); 
+  await SuperLogging.init(
+    run: () {
+      runApp(Main());  // `Main` is the root widget
+    }
+  );
 }
 ```
 
+*This is disabled if the app is running in debug mode, and `considerDebugMode` is set to `true`*

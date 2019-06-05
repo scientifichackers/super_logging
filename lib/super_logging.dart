@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:device_info/device_info.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
 import 'package:package_info/package_info.dart';
@@ -157,6 +158,7 @@ class SuperLogging {
     String logFileDir,
     int maxLogFiles: 10,
     bool considerDebugMode: false,
+    Function run,
   }) async {
     final shouldDisable = considerDebugMode && isInDebugMode;
     if (shouldDisable) {
@@ -181,5 +183,25 @@ class SuperLogging {
 
     _mainloop(getCurrentUser, sentryDsn != null);
     _log("mainloop started");
+
+    if (run == null) return;
+    final l = Logger("super_logging");
+
+    if (shouldDisable) {
+      await run();
+    } else {
+      FlutterError.onError = (errorDetails) {
+        l.fine(
+          "uncaught error at FlutterError.onError()",
+          errorDetails.exception,
+          errorDetails.stack,
+        );
+      };
+      runZoned(() async {
+        await run();
+      }, onError: (e, trace) {
+        l.fine("uncaught error at runZoned()", e, trace);
+      });
+    }
   }
 }
