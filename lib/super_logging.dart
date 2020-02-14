@@ -1,207 +1,369 @@
 library super_logging;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:device_info/device_info.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:get_ip/get_ip.dart';
 import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
 import 'package:package_info/package_info.dart';
-import 'package:path/path.dart' as pathlib;
+import 'package:path/path.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:sentry/sentry.dart';
 
 export 'package:sentry/sentry.dart' show User;
 
-final _dateFmt = DateFormat("y-M-d");
-final _sentryQueueController = StreamController<Event>();
+typedef Future<User> GetUser();
+typedef FutureOr<void> FutureOrVoidCallback();
 
-typedef Future<User> GetCurrentUser(Map<String, String> deviceInfo);
+extension SuperLogRecord on LogRecord {
+  String toPrettyString([String extraLines]) {
+    var header = "[$loggerName] [$level] [$time]";
 
-void _log(String msg) {
-  print("[super_logging] $msg");
+    var msg = "$header $message";
+
+    if (error != null) {
+      msg += "\n$error";
+    }
+    if (stackTrace != null) {
+      msg += "\n$stackTrace";
+    }
+
+    for (var line in extraLines?.split('\n') ?? []) {
+      msg += '\n$header $line';
+    }
+
+    return msg;
+  }
+
+  Event toEvent({String appVersion, User user}) {
+    return Event(
+      release: appVersion,
+      level: SeverityLevel.error,
+      culprit: message,
+      loggerName: loggerName,
+      exception: error,
+      stackTrace: stackTrace,
+      userContext: user,
+    );
+  }
+}
+
+class LogConfig {
+  /// The DSN for a Sentry app.
+  /// This can be obtained from the Sentry apps's "settings > Client Keys (DSN)" page.
+  ///
+  /// Only logs containing errors are sent to sentry.
+  /// Errors can be caught using a try-catch block, like so:
+  ///
+  /// ```
+  /// final logger = Logger("main");
+  ///
+  /// try {
+  ///   // do something dangerous here
+  /// } catch(e, trace) {
+  ///   logger.info("Huston, we have a problem", e, trace);
+  /// }
+  /// ```
+  ///
+  /// If this is [null], Sentry logger is completely disabled (default).
+  String sentryDsn;
+
+  /// A built-in retry mechanism for sending errors to sentry.
+  ///
+  /// This parameter defines the time to wait for, before retrying.
+  Duration sentryRetryDelay;
+
+  /// Path of the directory where log files will be stored.
+  ///
+  /// If this is an empty string (['']),
+  /// then a 'logs' directory will be created in [getTemporaryDirectory()] (default).
+  ///
+  /// If this is [null], file logging is completely disabled.
+  ///
+  /// A non-empty string will be treated as an explicit path to a directory.
+  ///
+  /// The chosen directory can be accessed using [SuperLogging.logFile.parent].
+  String logDirPath;
+
+  /// The maximum number of log files inside [logDirPath].
+  ///
+  /// One log file is created per day.
+  /// Older log files are deleted automatically.
+  int maxLogFiles;
+
+  /// Whether to enable super logging features in debug mode.
+  ///
+  /// Sentry and file logging are typically not needed in debug mode,
+  /// where a complete logcat is available.
+  bool enableInDebugMode;
+
+  /// If provided, super logging will invoke this function, and
+  /// any uncaught errors during its execution will be reported.
+  ///
+  /// Works by using [FlutterError.onError] and [runZoned].
+  FutureOrVoidCallback body;
+
+  /// The date format for storing log files.
+  ///
+  /// `DateFormat('y-M-d')` by default.
+  DateFormat dateFmt;
+
+  LogConfig({
+    this.sentryDsn,
+    this.sentryRetryDelay = const Duration(seconds: 30),
+    this.logDirPath = '',
+    this.maxLogFiles = 10,
+    this.enableInDebugMode = false,
+    this.body,
+    this.dateFmt,
+  }) {
+    dateFmt ??= DateFormat("y-M-d");
+  }
 }
 
 class SuperLogging {
-  static Map<String, String> deviceInfo;
-  static String appVersion;
-  static File logFile;
+  /// The logger for SuperLogging
+  static final $ = Logger('super_logging');
 
-  static Future<Map<String, String>> getDeviceInfo() async {
-    if (Platform.isAndroid) {
-      final info = await DeviceInfoPlugin().androidInfo;
-      return {
-        "manufacturer": info.manufacturer,
-        "model": info.model,
-        "product": info.product,
-        "androidVersion": info.version.release,
-        "supportedAbis": info.supportedAbis.toString(),
-      };
-    } else if (Platform.isIOS) {
-      final info = await DeviceInfoPlugin().iosInfo;
-      return {
-        "name": info.name,
-        "model": info.model,
-        "systemName": info.systemName,
-        "systemVersion": info.systemVersion,
-      };
+  /// The current super logging configuration
+  static LogConfig config;
+
+  static Future<void> main([LogConfig config]) async {
+    config ??= LogConfig();
+    SuperLogging.config = config;
+
+    WidgetsFlutterBinding.ensureInitialized();
+    deviceInfo = await getDeviceInfo();
+    ipAddress = await getIpAddress();
+    appVersion = await getAppVersion();
+    updateUser();
+
+    final enable = config.enableInDebugMode || kReleaseMode;
+    sentryIsEnabled = enable && config.sentryDsn != null;
+    fileIsEnabled = enable && config.logDirPath != null;
+
+    if (fileIsEnabled) {
+      await setupLogDir();
     }
-    return {};
+    if (sentryIsEnabled) {
+      sentryUploader();
+    }
+
+    mainloop();
+    $.info("mainloop started 💥");
+
+    if (!enable) {
+      $.info("detected debug mode; sentry & file logging disabled.");
+    }
+    if (fileIsEnabled) {
+      $.info("using this log file for today: $logFile");
+    }
+    if (sentryIsEnabled) {
+      $.info("sentry uploader started");
+    }
+
+    if (config.body == null) return;
+
+    if (enable) {
+      FlutterError.onError = (details) {
+        $.fine(
+          "uncaught error from FlutterError.onError()",
+          details.exception,
+          details.stack,
+        );
+      };
+      await runZoned(config.body, onError: (e, trace) {
+        $.fine("uncaught error from runZoned()", e, trace);
+      });
+    } else {
+      await config.body();
+    }
   }
 
-  static Future<File> createLogFile(String logFileDir, int maxLogFiles) async {
-    final dir = Directory(logFileDir);
-    await dir.create(recursive: true);
-    final logFile = File("$logFileDir/${_dateFmt.format(DateTime.now())}");
-    final files = <File>[];
+  static var _lastExtraLines = '';
 
-    for (final file in await dir.list().toList()) {
-      try {
-        _dateFmt.parse(pathlib.basename(file.path));
-      } on FormatException catch (_) {
-        continue;
+  static Future<void> mainloop() async {
+    Logger.root.level = Level.ALL;
+
+    await for (final rec in Logger.root.onRecord) {
+      // log misc info if it changed
+      var extraLines =
+          "app version: '$appVersion'\ncurrent user: ${user.toJson()}";
+      if (extraLines != _lastExtraLines) {
+        _lastExtraLines = extraLines;
+      } else {
+        extraLines = null;
       }
-      files.add(file);
+
+      var str = rec.toPrettyString(extraLines);
+
+      // write to stdout
+      print(str);
+
+      // write to logfile
+      if (fileIsEnabled) {
+        await logFile.writeAsString(str, mode: FileMode.append, flush: true);
+      }
+
+      // add error to sentry queue
+      if (sentryIsEnabled && rec.error != null) {
+        sentryQueueControl.add(
+          rec.toEvent(appVersion: appVersion, user: user),
+        );
+      }
     }
-    if (files.length > maxLogFiles) {
-      files.sort((a, b) {
-        return _dateFmt
-            .parse(pathlib.basename(a.path))
-            .compareTo(_dateFmt.parse(pathlib.basename(b.path)));
-      });
-      for (var file in files.sublist(0, files.length - maxLogFiles)) {
+  }
+
+  /// A queue to be consumed by [sentryUploader].
+  static var sentryQueueControl = StreamController<Event>();
+
+  /// Whether sentry logging is currently enabled or not.
+  static bool sentryIsEnabled;
+
+  static Future<void> sentryUploader() async {
+    var client = SentryClient(dsn: config.sentryDsn);
+
+    await for (final event in sentryQueueControl.stream) {
+      dynamic error, trace;
+
+      try {
+        var response = await client.capture(event: event);
+        error = response.error;
+      } catch (e, t) {
+        error = e;
+        trace = t;
+      }
+
+      if (error == null) continue;
+      $.fine(
+        "sentry upload failed; will retry after ${config.sentryRetryDelay}",
+        error,
+        trace,
+      );
+      doSentryRetry(event);
+    }
+  }
+
+  static void doSentryRetry(Event event) async {
+    await Future.delayed(config.sentryRetryDelay);
+    sentryQueueControl.add(event);
+  }
+
+  /// The log file currently in use.
+  static File logFile;
+
+  /// Whether file logging is currently enabled or not.
+  static bool fileIsEnabled;
+
+  static Future<void> setupLogDir() async {
+    var dirPath = config.logDirPath;
+
+    // choose [logDir]
+    if (dirPath.isEmpty) {
+      var tmpDir = await getTemporaryDirectory();
+      dirPath = '${tmpDir.path}/logs';
+    }
+
+    // create [logDir]
+    var dir = Directory(dirPath);
+    await dir.create(recursive: true);
+
+    var files = <File>[];
+    var dates = <File, DateTime>{};
+
+    // collect all log files with valid names
+    await for (final file in dir.list()) {
+      try {
+        var date = config.dateFmt.parse(basename(file.path));
+        dates[file] = date;
+      } on FormatException {}
+    }
+
+    // delete old log files, if [maxLogFiles] is exceeded.
+    if (files.length > config.maxLogFiles) {
+      // sort files based on ascending order of date (older first)
+      files.sort((a, b) => dates[a].compareTo(dates[b]));
+
+      var extra = files.length - config.maxLogFiles;
+      var toDelete = files.sublist(0, extra);
+
+      for (var file in toDelete) {
         await file.delete();
       }
     }
 
-    return logFile;
+    logFile = File("$dirPath/${config.dateFmt.format(DateTime.now())}");
   }
 
-  static Future<void> _sentryUploadLoop(
-    SentryClient sentry,
-    Duration sentryAutoRetryDelay,
-  ) async {
-    await for (final event in _sentryQueueController.stream) {
-      SentryResponse response;
-      try {
-        response = await sentry.capture(event: event);
-      } catch (e) {
-        _log("sentry upload failed with: $e; retry in $sentryAutoRetryDelay");
-        continue;
-      }
+  /// The current user.
+  ///
+  /// It's generally recommended to use [updateUser], than directly modify this.
+  static User user;
 
-      if (!response.isSuccessful) {
-        Future.delayed(sentryAutoRetryDelay, () {
-          _sentryQueueController.add(event);
-        });
-      }
-    }
-  }
+  /// Current device information as a JSON string,
+  /// obtained from device_info plugin.
+  ///
+  /// See: [getDeviceInfo]
+  static String deviceInfo;
 
-  static Future<void> _handleRec(
-    LogRecord rec,
-    GetCurrentUser getCurrentUser,
-    bool sentryEnabled,
-  ) async {
-    var asStr = "[${rec.loggerName}] [${rec.level}] [${rec.time.toString()}] "
-        "${rec.message}";
+  /// Current ip address, obtained from get_ip plugin.
+  ///
+  /// See: [getIpAddress]
+  static String ipAddress;
 
-    if (rec.error != null) asStr += "\n${rec.error}\n${rec.stackTrace}\n";
+  /// Current app version, obtained from package_info plugin.
+  ///
+  /// See: [getAppVersion]
+  static String appVersion;
 
-    // write to stdout
-    print(asStr);
+  /// set the properties for current user.
+  static void updateUser({
+    String id,
+    String username,
+    String email,
+    Map<String, String> extraInfo,
+  }) {
+    extraInfo ??= {};
+    extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
 
-    // write to logfile
-    await logFile?.writeAsString(
-      asStr,
-      mode: FileMode.append,
-      flush: true,
+    user = User(
+      id: id ?? '',
+      username: username,
+      email: email,
+      ipAddress: ipAddress,
+      extras: extraInfo,
     );
-
-    // add error to sentry queue
-    if (sentryEnabled && rec.error != null) {
-      final user = await getCurrentUser?.call(deviceInfo);
-      _sentryQueueController.add(
-        Event(
-          release: appVersion,
-          level: SeverityLevel.error,
-          culprit: rec.message,
-          loggerName: rec.loggerName,
-          exception: rec.error,
-          stackTrace: rec.stackTrace,
-          userContext: user ?? User(extras: deviceInfo),
-        ),
-      );
-    }
   }
 
-  static Future<void> _mainloop(
-    GetCurrentUser getCurrentUser,
-    bool sentryEnabled,
-  ) async {
-    Logger.root.level = Level.ALL;
-    await for (final rec in Logger.root.onRecord) {
-      await _handleRec(rec, getCurrentUser, sentryEnabled);
+  static Future<String> getDeviceInfo() async {
+    String method = '';
+    if (Platform.isAndroid) {
+      method = 'getAndroidDeviceInfo';
+    } else if (Platform.isIOS) {
+      method = 'getIosDeviceInfo';
     }
+
+    if (method.isEmpty) {
+      return '';
+    }
+
+    var result = await DeviceInfoPlugin.channel.invokeMethod(method);
+    var data = jsonEncode(result);
+
+    return data;
   }
 
-  static bool get isInDebugMode {
-    var value = false;
-    assert(value = true);
-    return value;
+  static Future<String> getAppVersion() async {
+    var pkgInfo = await PackageInfo.fromPlatform();
+    return pkgInfo.version;
   }
 
-  static Future<void> init({
-    String sentryDsn,
-    Duration sentryAutoRetryDelay: const Duration(seconds: 10),
-    GetCurrentUser getCurrentUser,
-    String logFileDir,
-    int maxLogFiles: 10,
-    bool considerDebugMode: false,
-    Function run,
-  }) async {
-    final shouldDisable = considerDebugMode && isInDebugMode;
-    if (shouldDisable) {
-      _log("detected debug mode; sentry & file logging will be disabled!");
-    }
-
-    appVersion = (await PackageInfo.fromPlatform()).version;
-    _log("appVersion: $appVersion");
-
-    deviceInfo = await getDeviceInfo();
-    _log("deviceInfo: $deviceInfo");
-
-    if (!shouldDisable && logFileDir != null) {
-      logFile = await createLogFile(logFileDir, maxLogFiles);
-      _log("log file for this session: $logFile");
-    }
-
-    if (!shouldDisable && sentryDsn != null) {
-      _sentryUploadLoop(SentryClient(dsn: sentryDsn), sentryAutoRetryDelay);
-      _log("sentry uploader initialized");
-    }
-
-    _mainloop(getCurrentUser, sentryDsn != null);
-    _log("mainloop started");
-
-    if (run == null) return;
-    final l = Logger("super_logging");
-
-    if (shouldDisable) {
-      await run();
-    } else {
-      FlutterError.onError = (errorDetails) {
-        l.fine(
-          "uncaught error at FlutterError.onError()",
-          errorDetails.exception,
-          errorDetails.stack,
-        );
-      };
-      runZoned(() async {
-        await run();
-      }, onError: (e, trace) {
-        l.fine("uncaught error at runZoned()", e, trace);
-      });
-    }
+  static Future<String> getIpAddress() async {
+    return await GetIp.ipAddress;
   }
 }
