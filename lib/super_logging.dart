@@ -37,6 +37,8 @@ extension SuperLogRecord on LogRecord {
       msg += '\n$header $line';
     }
 
+    msg += '\n';
+    
     return msg;
   }
 
