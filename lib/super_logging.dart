@@ -36,8 +36,6 @@ extension SuperLogRecord on LogRecord {
     for (var line in extraLines?.split('\n') ?? []) {
       msg += '\n$header $line';
     }
-
-    msg += '\n';
     
     return msg;
   }
@@ -209,7 +207,8 @@ class SuperLogging {
 
       // write to logfile
       if (fileIsEnabled) {
-        await logFile.writeAsString(str, mode: FileMode.append, flush: true);
+        final strForLogFile = str + '\n';
+        await logFile.writeAsString(strForLogFile, mode: FileMode.append, flush: true);
       }
 
       // add error to sentry queue
