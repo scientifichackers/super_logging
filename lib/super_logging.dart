@@ -36,7 +36,7 @@ extension SuperLogRecord on LogRecord {
     for (var line in extraLines?.split('\n') ?? []) {
       msg += '\n$header $line';
     }
-    
+
     return msg;
   }
 
