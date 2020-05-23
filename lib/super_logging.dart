@@ -20,6 +20,23 @@ export 'package:sentry/sentry.dart' show User;
 typedef Future<User> GetUser();
 typedef FutureOr<void> FutureOrVoidCallback();
 
+extension SuperString on String {
+  Iterable<String> chunked(int chunkSize) sync* {
+    var start = 0;
+
+    while (true) {
+      var stop = start + chunkSize;
+      if (stop > length) break;
+      yield substring(start, stop);
+      start = stop;
+    }
+
+    if (start < length) {
+      yield substring(start);
+    }
+  }
+}
+
 extension SuperLogRecord on LogRecord {
   String toPrettyString([String extraLines]) {
     var header = "[$loggerName] [$level] [$time]";
@@ -154,8 +171,9 @@ class SuperLogging {
       sentryUploader();
     }
 
-    mainloop();
-    $.info("mainloop started 💥");
+    Logger.root.level = Level.ALL;
+    Logger.root.onRecord.listen(onLogRecord);
+    $.info("logger installed 💥");
 
     if (!enable) {
       $.info("detected debug mode; sentry & file logging disabled.");
@@ -187,41 +205,49 @@ class SuperLogging {
 
   static var _lastExtraLines = '';
 
-  static Future<void> mainloop() async {
-    Logger.root.level = Level.ALL;
+  static Future onLogRecord(LogRecord rec) async {
+    // log misc info if it changed
+    var extraLines =
+        "app version: '$appVersion'\ncurrent user: ${user.toJson()}";
+    if (extraLines != _lastExtraLines) {
+      _lastExtraLines = extraLines;
+    } else {
+      extraLines = null;
+    }
 
-    await for (final rec in Logger.root.onRecord) {
-      // log misc info if it changed
-      var extraLines =
-          "app version: '$appVersion'\ncurrent user: ${user.toJson()}";
-      if (extraLines != _lastExtraLines) {
-        _lastExtraLines = extraLines;
-      } else {
-        extraLines = null;
-      }
+    var str = rec.toPrettyString(extraLines);
 
-      var str = rec.toPrettyString(extraLines);
+    // write to stdout
+    printLog(str);
 
-      // write to stdout
-      print(str);
+    // write to logfile
+    if (fileIsEnabled) {
+      final strForLogFile = str + '\n';
+      await logFile.writeAsString(strForLogFile,
+          mode: FileMode.append, flush: true);
+    }
 
-      // write to logfile
-      if (fileIsEnabled) {
-        final strForLogFile = str + '\n';
-        await logFile.writeAsString(strForLogFile, mode: FileMode.append, flush: true);
-      }
+    // add error to sentry queue
+    if (sentryIsEnabled && rec.error != null) {
+      var event = rec.toEvent(appVersion: appVersion, user: user);
+      sentryQueueControl.add(event);
+    }
+  }
 
-      // add error to sentry queue
-      if (sentryIsEnabled && rec.error != null) {
-        sentryQueueControl.add(
-          rec.toEvent(appVersion: appVersion, user: user),
-        );
-      }
+  // Logs on android must be chunked or they get truncated otherwise
+  // See https://github.com/flutter/flutter/issues/22665
+  static var androidLongChunkSize = 800;
+
+  static void printLog(String text) {
+    if (Platform.isAndroid) {
+      text.chunked(androidLongChunkSize).forEach(print);
+    } else {
+      print(text);
     }
   }
 
   /// A queue to be consumed by [sentryUploader].
-  static var sentryQueueControl = StreamController<Event>();
+  static final sentryQueueControl = StreamController<Event>();
 
   /// Whether sentry logging is currently enabled or not.
   static bool sentryIsEnabled;
