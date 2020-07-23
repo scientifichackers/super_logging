@@ -6,7 +6,7 @@ import 'package:super_logging/super_logging.dart';
 var random = Random();
 
 void main() {
-  final chunkSize = SuperLogging.androidLongChunkSize;
+  final chunkSize = SuperLogging.logChunkSize;
 
   test('test with empty text', () {
     var text = randomText(0);

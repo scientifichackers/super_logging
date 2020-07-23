@@ -97,10 +97,10 @@ class LogConfig {
 
   /// Path of the directory where log files will be stored.
   ///
-  /// If this is an empty string (['']),
-  /// then a 'logs' directory will be created in [getTemporaryDirectory()] (default).
+  /// If this is [null], file logging is completely disabled (default).
   ///
-  /// If this is [null], file logging is completely disabled.
+  /// If this is an empty string (['']),
+  /// then a 'logs' directory will be created in [getTemporaryDirectory()].
   ///
   /// A non-empty string will be treated as an explicit path to a directory.
   ///
@@ -133,7 +133,7 @@ class LogConfig {
   LogConfig({
     this.sentryDsn,
     this.sentryRetryDelay = const Duration(seconds: 30),
-    this.logDirPath = '',
+    this.logDirPath,
     this.maxLogFiles = 10,
     this.enableInDebugMode = false,
     this.body,
@@ -234,16 +234,12 @@ class SuperLogging {
     }
   }
 
-  // Logs on android must be chunked or they get truncated otherwise
+  // Logs on must be chunked or they get truncated otherwise
   // See https://github.com/flutter/flutter/issues/22665
-  static var androidLongChunkSize = 800;
+  static var logChunkSize = 800;
 
   static void printLog(String text) {
-    if (Platform.isAndroid) {
-      text.chunked(androidLongChunkSize).forEach(print);
-    } else {
-      print(text);
-    }
+    text.chunked(logChunkSize).forEach(print);
   }
 
   /// A queue to be consumed by [sentryUploader].
@@ -256,21 +252,18 @@ class SuperLogging {
     var client = SentryClient(dsn: config.sentryDsn);
 
     await for (final event in sentryQueueControl.stream) {
-      dynamic error, trace;
+      dynamic error;
 
       try {
         var response = await client.capture(event: event);
         error = response.error;
-      } catch (e, t) {
+      } catch (e) {
         error = e;
-        trace = t;
       }
 
       if (error == null) continue;
       $.fine(
-        "sentry upload failed; will retry after ${config.sentryRetryDelay}",
-        error,
-        trace,
+        "sentry upload failed; will retry after ${config.sentryRetryDelay} ($error)",
       );
       doSentryRetry(event);
     }
@@ -292,8 +285,8 @@ class SuperLogging {
 
     // choose [logDir]
     if (dirPath.isEmpty) {
-      var tmpDir = await getTemporaryDirectory();
-      dirPath = '${tmpDir.path}/logs';
+      var root = await getExternalStorageDirectory();
+      dirPath = '${root.path}/logs';
     }
 
     // create [logDir]
@@ -324,7 +317,7 @@ class SuperLogging {
       }
     }
 
-    logFile = File("$dirPath/${config.dateFmt.format(DateTime.now())}");
+    logFile = File("$dirPath/${config.dateFmt.format(DateTime.now())}.txt");
   }
 
   /// The current user.
