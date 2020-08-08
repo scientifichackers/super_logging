@@ -380,7 +380,7 @@ class SuperLogging {
 
   static Future<String> getAppVersion() async {
     var pkgInfo = await PackageInfo.fromPlatform();
-    return pkgInfo.version;
+    return "${pkgInfo.version}+${pkgInfo.buildNumber}";
   }
 
   static Future<String> getIpAddress() async {
