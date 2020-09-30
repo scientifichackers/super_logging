@@ -155,9 +155,16 @@ class SuperLogging {
     SuperLogging.config = config;
 
     WidgetsFlutterBinding.ensureInitialized();
-    deviceInfo = await getDeviceInfo();
-    ipAddress = await getIpAddress();
-    appVersion = await getAppVersion();
+
+    if (kIsWeb) {
+      deviceInfo = "web";
+      ipAddress = "localhost";
+      appVersion = "0.0.1";
+    } else {
+      deviceInfo = await getDeviceInfo();
+      ipAddress = await getIpAddress();
+      appVersion = await getAppVersion();
+    }
     updateUser();
 
     final enable = config.enableInDebugMode || kReleaseMode;
