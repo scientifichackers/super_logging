@@ -4,8 +4,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:device_info/device_info.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get_ip/get_ip.dart';
 import 'package:intl/intl.dart';
@@ -44,10 +44,10 @@ extension SuperLogRecord on LogRecord {
     var msg = "$header $message";
 
     if (error != null) {
-      msg += "\n$error";
+      msg += "\n⤷ type: ${error.runtimeType}\n⤷ error: $error";
     }
     if (stackTrace != null) {
-      msg += "\n$stackTrace";
+      msg += "\n⤷ trace: $stackTrace";
     }
 
     for (var line in extraLines?.split('\n') ?? []) {
@@ -368,6 +368,8 @@ class SuperLogging {
   }
 
   static Future<String> getDeviceInfo() async {
+    var channel = MethodChannel('plugins.flutter.io/device_info');
+
     String method = '';
     if (Platform.isAndroid) {
       method = 'getAndroidDeviceInfo';
@@ -379,7 +381,7 @@ class SuperLogging {
       return '';
     }
 
-    var result = await DeviceInfoPlugin.channel.invokeMethod(method);
+    var result = await channel.invokeMethod(method);
     var data = jsonEncode(result);
 
     return data;
