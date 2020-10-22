@@ -16,7 +16,6 @@ import 'package:sentry/sentry.dart';
 
 export 'package:sentry/sentry.dart' show User;
 
-typedef Future<User> GetUser();
 typedef FutureOr<void> FutureOrVoidCallback();
 
 extension SuperString on String {
@@ -155,9 +154,9 @@ class SuperLogging {
 
     WidgetsFlutterBinding.ensureInitialized();
 
-    appVersion = await getAppVersion();
+    appVersion ??= await getAppVersion();
     if (!kIsWeb) {
-      deviceInfo = await getDeviceInfo();
+      deviceInfo ??= await getDeviceInfo();
     }
     updateUser();
 
@@ -323,7 +322,7 @@ class SuperLogging {
 
   /// The current user.
   ///
-  /// It's generally recommended to use [updateUser], than directly modify this.
+  /// It's generally recommended to use [getUser], than directly modify this.
   static User user;
 
   /// Current device information as a JSON string,
@@ -345,8 +344,9 @@ class SuperLogging {
     Map<String, String> extraInfo,
   }) {
     extraInfo ??= {};
-    extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
-
+    if (deviceInfo != null) {
+      extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
+    }
     user = User(
       id: id ?? '',
       username: username,
