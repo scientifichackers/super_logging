@@ -7,10 +7,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:get_ip/get_ip.dart';
 import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
-import 'package:package_info/package_info.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sentry/sentry.dart';
@@ -156,14 +155,9 @@ class SuperLogging {
 
     WidgetsFlutterBinding.ensureInitialized();
 
-    if (kIsWeb) {
-      deviceInfo = "web";
-      ipAddress = "localhost";
-      appVersion = "0.0.1";
-    } else {
+    appVersion = await getAppVersion();
+    if (!kIsWeb) {
       deviceInfo = await getDeviceInfo();
-      ipAddress = await getIpAddress();
-      appVersion = await getAppVersion();
     }
     updateUser();
 
@@ -338,11 +332,6 @@ class SuperLogging {
   /// See: [getDeviceInfo]
   static String deviceInfo;
 
-  /// Current ip address, obtained from get_ip plugin.
-  ///
-  /// See: [getIpAddress]
-  static String ipAddress;
-
   /// Current app version, obtained from package_info plugin.
   ///
   /// See: [getAppVersion]
@@ -362,7 +351,6 @@ class SuperLogging {
       id: id ?? '',
       username: username,
       email: email,
-      ipAddress: ipAddress,
       extras: extraInfo,
     );
   }
@@ -390,9 +378,5 @@ class SuperLogging {
   static Future<String> getAppVersion() async {
     var pkgInfo = await PackageInfo.fromPlatform();
     return "${pkgInfo.version}+${pkgInfo.buildNumber}";
-  }
-
-  static Future<String> getIpAddress() async {
-    return await GetIp.ipAddress;
   }
 }
