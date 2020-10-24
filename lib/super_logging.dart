@@ -45,7 +45,7 @@ extension SuperLogRecord on LogRecord {
       msg += "\n⤷ type: ${error.runtimeType}\n⤷ error: $error";
     }
     if (stackTrace != null) {
-      msg += "\n⤷ trace: $stackTrace";
+      msg += "\n${FlutterError.demangleStackTrace(stackTrace)}";
     }
 
     for (var line in extraLines?.split('\n') ?? []) {
@@ -166,13 +166,13 @@ class _SuperLogging {
     if (enable) {
       FlutterError.onError = (details) {
         $.fine(
-          "uncaught error from FlutterError.onError()",
+          "uncaught flutter error",
           details.exception,
           details.stack,
         );
       };
       await runZoned(body, onError: (e, trace) {
-        $.fine("uncaught error from runZoned()", e, trace);
+        $.fine("uncaught error", e, trace);
       });
     } else {
       await body();
