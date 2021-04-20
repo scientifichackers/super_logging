@@ -1,3 +1,4 @@
+// @dart=2.9
 library super_logging;
 
 import 'dart:async';
@@ -55,25 +56,22 @@ extension SuperLogRecord on LogRecord {
     return msg;
   }
 
-  Event toEvent({String appVersion, User user}) {
-    return Event(
-      release: appVersion,
-      level: SeverityLevel.error,
-      culprit: message,
-      loggerName: loggerName,
-      exception: error,
-      stackTrace: stackTrace,
-      userContext: user,
-    );
-  }
+  // SentryEvent toEvent({String appVersion, User user}) {
+  //   return SentryEvent(
+  //     release: appVersion,
+  //     level: SentryLevel.error,
+  //     culprit: message,
+  //     logger: loggerName,
+  //     exception: error,
+  //     stackTrace: Error().withstackTrace,
+  //     user: user,
+  //   );
+  // }
 }
 
 final SuperLogging = _SuperLogging();
 
-class _SuperLogging {
-  /// The logger for SuperLogging
-  static final $ = Logger('super_logging');
-
+class SuperLoggingConfig {
   /// The DSN for a Sentry app.
   /// This can be obtained from the Sentry apps's "settings > Client Keys (DSN)" page.
   ///
@@ -127,6 +125,18 @@ class _SuperLogging {
   /// `DateFormat('y-M-d')` by default.
   DateFormat dateFmt = DateFormat("y-M-d");
 
+  /// Allows filtering events that will be sent to sentry.
+  ///
+  /// The default behavior is to forward all errors.
+  bool Function(LogRecord) sentryFilter = (rec) => rec.error != null;
+}
+
+class _SuperLogging {
+  /// The logger for SuperLogging
+  static final $ = Logger('super_logging');
+
+  final SuperLoggingConfig config = SuperLoggingConfig();
+
   Future<void> main(FutureOrVoidCallback body) async {
     WidgetsFlutterBinding.ensureInitialized();
 
@@ -134,11 +144,11 @@ class _SuperLogging {
     if (!kIsWeb) {
       deviceInfo ??= await getDeviceInfo();
     }
-    user = getUser();
+    // user = getUser();
 
-    final enable = enableInDebugMode || kReleaseMode;
-    _sentryIsEnabled = enable && sentryDsn != null;
-    _fileIsEnabled = enable && logDirPath != null;
+    final enable = config.enableInDebugMode || kReleaseMode;
+    _sentryIsEnabled = enable && config.sentryDsn != null;
+    _fileIsEnabled = enable && config.logDirPath != null;
 
     if (_fileIsEnabled) {
       await setupLogDir();
@@ -171,9 +181,16 @@ class _SuperLogging {
           details.stack,
         );
       };
-      await runZoned(body, onError: (e, trace) {
-        $.fine("uncaught error", e, trace);
-      });
+      // await SentryFlutter.init(
+      //   (options) {
+      //     options.dsn = sentryDsn;
+      //   },
+      //   appRunner: () {
+      //     return runZonedGuarded(body, (e, trace) {
+      //       $.fine("uncaught error", e, trace);
+      //     });
+      //   },
+      // );
     } else {
       await body();
     }
@@ -181,15 +198,11 @@ class _SuperLogging {
 
   var _lastExtraLines = '';
 
-  /// Allows filtering events that will be sent to sentry.
-  ///
-  /// The default behavior is to forward all errors.
-  bool Function(LogRecord) sentryFilter = (rec) => rec.error != null;
-
   Future onLogRecord(LogRecord rec) async {
     // log misc info if it changed
-    var extraLines =
-        "app version: '$appVersion'\ncurrent user: ${user.toJson()}";
+    // var extraLines =
+    //     "app version: '$appVersion'\ncurrent user: ${user.toJson()}";
+    var extraLines = "app version: '$appVersion'";
     if (extraLines != _lastExtraLines) {
       _lastExtraLines = extraLines;
     } else {
@@ -209,9 +222,9 @@ class _SuperLogging {
     }
 
     // add error to sentry queue
-    if (_sentryIsEnabled && sentryFilter(rec)) {
-      var event = rec.toEvent(appVersion: appVersion, user: user);
-      sentryQueueControl.add(event);
+    if (_sentryIsEnabled && config.sentryFilter(rec)) {
+      // var event = rec.toEvent(appVersion: appVersion, user: user);
+      // sentryQueueControl.add(event);
     }
   }
 
@@ -224,34 +237,35 @@ class _SuperLogging {
   }
 
   /// A queue to be consumed by [sentryUploader].
-  final sentryQueueControl = StreamController<Event>();
+  final sentryQueueControl = StreamController<SentryEvent>();
 
   /// Whether sentry logging is currently enabled or not.
   bool _sentryIsEnabled;
 
   Future<void> sentryUploader() async {
-    var client = SentryClient(dsn: sentryDsn);
+    var client = SentryClient(SentryOptions(dsn: config.sentryDsn));
 
     await for (final event in sentryQueueControl.stream) {
       dynamic error;
 
       try {
-        var response = await client.capture(event: event);
-        error = response.error;
+        // var response =
+        //     await client.captureException(event, stackTrace: stackTrace);
+        // error = response.error;
       } catch (e) {
         error = e;
       }
 
       if (error == null) continue;
       $.fine(
-        "sentry upload failed; will retry after $sentryRetryDelay (${error.runtimeType}: $error)",
+        "sentry upload failed; will retry after ${config.sentryRetryDelay} (${error.runtimeType}: $error)",
       );
       doSentryRetry(event);
     }
   }
 
-  void doSentryRetry(Event event) async {
-    await Future.delayed(sentryRetryDelay);
+  void doSentryRetry(SentryEvent event) async {
+    await Future.delayed(config.sentryRetryDelay);
     sentryQueueControl.add(event);
   }
 
@@ -263,65 +277,66 @@ class _SuperLogging {
 
   Future<void> setupLogDir() async {
     // choose log dir
-    if (logDirPath.isEmpty) {
-      var root = await getExternalStorageDirectory();
-      logDirPath = '${root.path}/logs';
+    if (config.logDirPath.isEmpty) {
+      Directory root = await getExternalStorageDirectory();
+      config.logDirPath = '${root.path}/logs';
     }
 
     // create log dir
-    var dir = Directory(logDirPath);
+    Directory dir = Directory(config.logDirPath);
     await dir.create(recursive: true);
 
-    var files = <File>[];
-    var dates = <File, DateTime>{};
+    List<File> files = <File>[];
+    Map<File, DateTime> dates = <File, DateTime>{};
 
     // collect all log files with valid names
-    await for (final file in dir.list()) {
+    await for (FileSystemEntity file in dir.list()) {
       try {
-        var date = dateFmt.parse(basename(file.path));
+        DateTime date = config.dateFmt.parse(basename(file.path));
         dates[file] = date;
       } on FormatException {}
     }
 
     // delete old log files, if [maxLogFiles] is exceeded.
-    if (files.length > maxLogFiles) {
+    if (files.length > config.maxLogFiles) {
       // sort files based on ascending order of date (older first)
       files.sort((a, b) => dates[a].compareTo(dates[b]));
 
-      var extra = files.length - maxLogFiles;
-      var toDelete = files.sublist(0, extra);
+      int extra = files.length - config.maxLogFiles;
+      List<File> toDelete = files.sublist(0, extra);
 
-      for (var file in toDelete) {
+      for (File file in toDelete) {
         await file.delete();
       }
     }
 
-    logFile = File("$logDirPath/${dateFmt.format(DateTime.now())}.txt");
+    logFile = File(
+        "${config.logDirPath}/${config.dateFmt.format(DateTime.now())}.txt");
   }
 
-  /// The current user.
-  ///
-  /// See: [getUser]
-  User user;
-
-  /// set the properties for current user.
-  User getUser({
-    String id,
-    String username,
-    String email,
-    Map<String, String> extraInfo,
-  }) {
-    extraInfo ??= {};
-    if (deviceInfo != null) {
-      extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
-    }
-    return User(
-      id: id ?? '',
-      username: username,
-      email: email,
-      extras: extraInfo,
-    );
-  }
+  // /// The current user.
+  // ///
+  // /// See: [getUser]
+  // User user;
+  //
+  // /// set the properties for current user.
+  // User getUser({
+  //   String id,
+  //   String username,
+  //   String email,
+  //   Map<String, String> extraInfo,
+  // }) {
+  //   extraInfo ??= {};
+  //   if (deviceInfo != null) {
+  //     extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
+  //   }
+  //   return User(
+  //     id: id ?? '',
+  //     username: username,
+  //     email: email,
+  //     extras: extraInfo,
+  //   );
+  // }
 
   /// Current device information as a JSON string,
   /// obtained from device_info plugin.
@@ -330,7 +345,7 @@ class _SuperLogging {
   String deviceInfo;
 
   Future<String> getDeviceInfo() async {
-    var channel = MethodChannel('plugins.flutter.io/device_info');
+    MethodChannel channel = MethodChannel('plugins.flutter.io/device_info');
 
     String method = '';
     if (Platform.isAndroid) {
@@ -343,8 +358,8 @@ class _SuperLogging {
       return '';
     }
 
-    var result = await channel.invokeMethod(method);
-    var data = jsonEncode(result);
+    dynamic result = await channel.invokeMethod(method);
+    String data = jsonEncode(result);
 
     return data;
   }
@@ -355,7 +370,7 @@ class _SuperLogging {
   String appVersion;
 
   Future<String> getAppVersion() async {
-    var pkgInfo = await PackageInfo.fromPlatform();
+    PackageInfo pkgInfo = await PackageInfo.fromPlatform();
     return "${pkgInfo.version}+${pkgInfo.buildNumber}";
   }
 }
