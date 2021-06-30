@@ -14,17 +14,18 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sentry/sentry.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 
-export 'package:sentry/sentry.dart' show User;
+export 'package:sentry/sentry.dart' show SentryUser;
 
 typedef FutureOr<void> FutureOrVoidCallback();
 
 extension SuperString on String {
   Iterable<String> chunked(int chunkSize) sync* {
-    var start = 0;
+    int start = 0;
 
     while (true) {
-      var stop = start + chunkSize;
+      int stop = start + chunkSize;
       if (stop > length) break;
       yield substring(start, stop);
       start = stop;
@@ -38,9 +39,9 @@ extension SuperString on String {
 
 extension SuperLogRecord on LogRecord {
   String toPrettyString([String extraLines]) {
-    var header = "[$loggerName] [$level] [$time]";
+    String header = "[$loggerName] [$level] [$time]";
 
-    var msg = "$header $message";
+    String msg = "$header $message";
 
     if (error != null) {
       msg += "\n⤷ type: ${error.runtimeType}\n⤷ error: $error";
@@ -49,24 +50,12 @@ extension SuperLogRecord on LogRecord {
       msg += "\n${FlutterError.demangleStackTrace(stackTrace)}";
     }
 
-    for (var line in extraLines?.split('\n') ?? []) {
+    for (String line in extraLines?.split('\n') ?? []) {
       msg += '\n$header $line';
     }
 
     return msg;
   }
-
-  // SentryEvent toEvent({String appVersion, User user}) {
-  //   return SentryEvent(
-  //     release: appVersion,
-  //     level: SentryLevel.error,
-  //     culprit: message,
-  //     logger: loggerName,
-  //     exception: error,
-  //     stackTrace: Error().withstackTrace,
-  //     user: user,
-  //   );
-  // }
 }
 
 final SuperLogging = _SuperLogging();
@@ -144,7 +133,7 @@ class _SuperLogging {
     if (!kIsWeb) {
       deviceInfo ??= await getDeviceInfo();
     }
-    // user = getUser();
+    user = userFactory();
 
     final enable = config.enableInDebugMode || kReleaseMode;
     _sentryIsEnabled = enable && config.sentryDsn != null;
@@ -181,90 +170,92 @@ class _SuperLogging {
           details.stack,
         );
       };
-      // await SentryFlutter.init(
-      //   (options) {
-      //     options.dsn = sentryDsn;
-      //   },
-      //   appRunner: () {
-      //     return runZonedGuarded(body, (e, trace) {
-      //       $.fine("uncaught error", e, trace);
-      //     });
-      //   },
-      // );
+      await SentryFlutter.init(
+        (options) {
+          options.dsn = config.sentryDsn;
+        },
+        // Init your App.
+        appRunner: body,
+      );
     } else {
       await body();
     }
   }
 
-  var _lastExtraLines = '';
+  String _lastExtraLines = '';
 
   Future onLogRecord(LogRecord rec) async {
-    // log misc info if it changed
-    // var extraLines =
-    //     "app version: '$appVersion'\ncurrent user: ${user.toJson()}";
-    var extraLines = "app version: '$appVersion'";
+    // log misc info, but only if it changed
+    String extraLines =
+        "app version: $appVersion\ncurrent user: ${user.toJson()}";
     if (extraLines != _lastExtraLines) {
       _lastExtraLines = extraLines;
     } else {
       extraLines = null;
     }
 
-    var str = rec.toPrettyString(extraLines);
+    String str = rec.toPrettyString(extraLines);
 
     // write to stdout
     printLog(str);
 
     // write to logfile
     if (_fileIsEnabled) {
-      final strForLogFile = str + '\n';
-      await logFile.writeAsString(strForLogFile,
-          mode: FileMode.append, flush: true);
+      String strForLogFile = str + '\n';
+      await logFile.writeAsString(
+        strForLogFile,
+        mode: FileMode.append,
+        flush: true,
+      );
     }
 
     // add error to sentry queue
     if (_sentryIsEnabled && config.sentryFilter(rec)) {
-      // var event = rec.toEvent(appVersion: appVersion, user: user);
-      // sentryQueueControl.add(event);
+      sentryQueueControl.add(
+        _SentryQueueItem(
+          rec: rec,
+          event: SentryEvent(
+            release: appVersion,
+            level: SentryLevel.error,
+            culprit: rec.message,
+            logger: rec.loggerName,
+            throwable: rec.error,
+            user: user,
+          ),
+        ),
+      );
     }
   }
 
   // Logs on must be chunked or they get truncated otherwise
   // See https://github.com/flutter/flutter/issues/22665
-  var logChunkSize = 800;
+  int logChunkSize = 800;
 
   void printLog(String text) {
     text.chunked(logChunkSize).forEach(print);
   }
 
   /// A queue to be consumed by [sentryUploader].
-  final sentryQueueControl = StreamController<SentryEvent>();
+  final StreamController<_SentryQueueItem> sentryQueueControl =
+      StreamController<_SentryQueueItem>();
 
   /// Whether sentry logging is currently enabled or not.
   bool _sentryIsEnabled;
 
   Future<void> sentryUploader() async {
-    var client = SentryClient(SentryOptions(dsn: config.sentryDsn));
-
-    await for (final event in sentryQueueControl.stream) {
-      dynamic error;
-
+    await for (_SentryQueueItem item in sentryQueueControl.stream) {
       try {
-        // var response =
-        //     await client.captureException(event, stackTrace: stackTrace);
-        // error = response.error;
+        await Sentry.captureEvent(item.event, stackTrace: item.rec.stackTrace);
       } catch (e) {
-        error = e;
+        $.fine(
+          "sentry upload failed; will retry after ${config.sentryRetryDelay} (${e.runtimeType}: $e)",
+        );
+        doSentryRetry(item);
       }
-
-      if (error == null) continue;
-      $.fine(
-        "sentry upload failed; will retry after ${config.sentryRetryDelay} (${error.runtimeType}: $error)",
-      );
-      doSentryRetry(event);
     }
   }
 
-  void doSentryRetry(SentryEvent event) async {
+  void doSentryRetry(_SentryQueueItem event) async {
     await Future.delayed(config.sentryRetryDelay);
     sentryQueueControl.add(event);
   }
@@ -311,32 +302,33 @@ class _SuperLogging {
     }
 
     logFile = File(
-        "${config.logDirPath}/${config.dateFmt.format(DateTime.now())}.txt");
+      "${config.logDirPath}/${config.dateFmt.format(DateTime.now())}.txt",
+    );
   }
 
-  // /// The current user.
-  // ///
-  // /// See: [getUser]
-  // User user;
-  //
-  // /// set the properties for current user.
-  // User getUser({
-  //   String id,
-  //   String username,
-  //   String email,
-  //   Map<String, String> extraInfo,
-  // }) {
-  //   extraInfo ??= {};
-  //   if (deviceInfo != null) {
-  //     extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
-  //   }
-  //   return User(
-  //     id: id ?? '',
-  //     username: username,
-  //     email: email,
-  //     extras: extraInfo,
-  //   );
-  // }
+  /// The current user.
+  ///
+  /// See: [userFactory]
+  SentryUser user;
+
+  /// set the properties for current user.
+  SentryUser userFactory({
+    String id,
+    String username,
+    String email,
+    Map<String, String> extraInfo,
+  }) {
+    extraInfo ??= {};
+    if (deviceInfo != null) {
+      extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
+    }
+    return SentryUser(
+      id: id ?? '',
+      username: username,
+      email: email,
+      extras: extraInfo,
+    );
+  }
 
   /// Current device information as a JSON string,
   /// obtained from device_info plugin.
@@ -373,4 +365,14 @@ class _SuperLogging {
     PackageInfo pkgInfo = await PackageInfo.fromPlatform();
     return "${pkgInfo.version}+${pkgInfo.buildNumber}";
   }
+}
+
+class _SentryQueueItem {
+  final SentryEvent event;
+  final LogRecord rec;
+
+  _SentryQueueItem({
+    @required this.event,
+    @required this.rec,
+  });
 }
