@@ -1,6 +1,6 @@
 name: super_logging
 description: The usual dart logging module, but with superpowers! Let's you easily log to stdout, disk and sentry.io.
-version: 3.0.0-dev.1
+version: 3.1.0-dev.1
 author: Dev Aggarwal <devpxy@gmail.com>
 homepage: https://github.com/scientifichackers/super_logging
 
@@ -11,8 +11,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-  package_info_plus: ^1.0.0
-  device_info: ^2.0.0
   logging: ^1.0.1
   sentry: ^5.1.0
   intl: ^0.17.0

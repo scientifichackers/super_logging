@@ -2,15 +2,12 @@
 library super_logging;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:intl/intl.dart';
 import 'package:logging/logging.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sentry/sentry.dart';
@@ -80,11 +77,6 @@ class SuperLoggingConfig {
   /// If this is [null], Sentry logger is completely disabled (default).
   String sentryDsn;
 
-  /// A built-in retry mechanism for sending errors to sentry.
-  ///
-  /// This parameter defines the time to wait for, before retrying.
-  Duration sentryRetryDelay = const Duration(seconds: 30);
-
   /// Path of the directory where log files will be stored.
   ///
   /// If this is [null], file logging is completely disabled (default).
@@ -126,14 +118,10 @@ class _SuperLogging {
 
   final SuperLoggingConfig config = SuperLoggingConfig();
 
-  Future<void> main(FutureOrVoidCallback body) async {
+  Future<void> main([FutureOrVoidCallback body]) async {
     WidgetsFlutterBinding.ensureInitialized();
 
-    appVersion ??= await getAppVersion();
-    if (!kIsWeb) {
-      deviceInfo ??= await getDeviceInfo();
-    }
-    user = userFactory();
+    sentryUser = userFactory();
 
     final enable = config.enableInDebugMode || kReleaseMode;
     _sentryIsEnabled = enable && config.sentryDsn != null;
@@ -141,9 +129,6 @@ class _SuperLogging {
 
     if (_fileIsEnabled) {
       await setupLogDir();
-    }
-    if (_sentryIsEnabled) {
-      sentryUploader();
     }
 
     Logger.root.level = Level.ALL;
@@ -162,19 +147,11 @@ class _SuperLogging {
 
     if (body == null) return;
 
-    if (enable) {
-      FlutterError.onError = (details) {
-        $.fine(
-          "uncaught flutter error",
-          details.exception,
-          details.stack,
-        );
-      };
+    if (_sentryIsEnabled) {
       await SentryFlutter.init(
         (options) {
           options.dsn = config.sentryDsn;
         },
-        // Init your App.
         appRunner: body,
       );
     } else {
@@ -186,8 +163,7 @@ class _SuperLogging {
 
   Future onLogRecord(LogRecord rec) async {
     // log misc info, but only if it changed
-    String extraLines =
-        "app version: $appVersion\ncurrent user: ${user.toJson()}";
+    String extraLines = "current user: ${sentryUser.toJson()}";
     if (extraLines != _lastExtraLines) {
       _lastExtraLines = extraLines;
     } else {
@@ -209,20 +185,16 @@ class _SuperLogging {
       );
     }
 
-    // add error to sentry queue
     if (_sentryIsEnabled && config.sentryFilter(rec)) {
-      sentryQueueControl.add(
-        _SentryQueueItem(
-          rec: rec,
-          event: SentryEvent(
-            release: appVersion,
-            level: SentryLevel.error,
-            culprit: rec.message,
-            logger: rec.loggerName,
-            throwable: rec.error,
-            user: user,
-          ),
+      Sentry.captureEvent(
+        SentryEvent(
+          throwable: rec.error,
+          message: SentryMessage(rec.message),
+          level: SentryLevel.error,
+          logger: rec.loggerName,
+          user: sentryUser,
         ),
+        stackTrace: rec.stackTrace,
       );
     }
   }
@@ -235,30 +207,8 @@ class _SuperLogging {
     text.chunked(logChunkSize).forEach(print);
   }
 
-  /// A queue to be consumed by [sentryUploader].
-  final StreamController<_SentryQueueItem> sentryQueueControl =
-      StreamController<_SentryQueueItem>();
-
   /// Whether sentry logging is currently enabled or not.
   bool _sentryIsEnabled;
-
-  Future<void> sentryUploader() async {
-    await for (_SentryQueueItem item in sentryQueueControl.stream) {
-      try {
-        await Sentry.captureEvent(item.event, stackTrace: item.rec.stackTrace);
-      } catch (e) {
-        $.fine(
-          "sentry upload failed; will retry after ${config.sentryRetryDelay} (${e.runtimeType}: $e)",
-        );
-        doSentryRetry(item);
-      }
-    }
-  }
-
-  void doSentryRetry(_SentryQueueItem event) async {
-    await Future.delayed(config.sentryRetryDelay);
-    sentryQueueControl.add(event);
-  }
 
   /// The log file currently in use.
   File logFile;
@@ -309,7 +259,22 @@ class _SuperLogging {
   /// The current user.
   ///
   /// See: [userFactory]
-  SentryUser user;
+  SentryUser _sentryUser;
+
+  /// The current user.
+  ///
+  /// See: [userFactory]
+  SentryUser get sentryUser => _sentryUser;
+
+  /// The current user.
+  ///
+  /// See: [userFactory]
+  set sentryUser(SentryUser sentryUser) {
+    _sentryUser = sentryUser;
+    Sentry.configureScope((scope) {
+      scope.user = sentryUser;
+    });
+  }
 
   /// set the properties for current user.
   SentryUser userFactory({
@@ -319,9 +284,6 @@ class _SuperLogging {
     Map<String, String> extraInfo,
   }) {
     extraInfo ??= {};
-    if (deviceInfo != null) {
-      extraInfo.putIfAbsent('deviceInfo', () => deviceInfo);
-    }
     return SentryUser(
       id: id ?? '',
       username: username,
@@ -329,50 +291,4 @@ class _SuperLogging {
       extras: extraInfo,
     );
   }
-
-  /// Current device information as a JSON string,
-  /// obtained from device_info plugin.
-  ///
-  /// See: [getDeviceInfo]
-  String deviceInfo;
-
-  Future<String> getDeviceInfo() async {
-    MethodChannel channel = MethodChannel('plugins.flutter.io/device_info');
-
-    String method = '';
-    if (Platform.isAndroid) {
-      method = 'getAndroidDeviceInfo';
-    } else if (Platform.isIOS) {
-      method = 'getIosDeviceInfo';
-    }
-
-    if (method.isEmpty) {
-      return '';
-    }
-
-    dynamic result = await channel.invokeMethod(method);
-    String data = jsonEncode(result);
-
-    return data;
-  }
-
-  /// Current app version, obtained from package_info plugin.
-  ///
-  /// See: [getAppVersion]
-  String appVersion;
-
-  Future<String> getAppVersion() async {
-    PackageInfo pkgInfo = await PackageInfo.fromPlatform();
-    return "${pkgInfo.version}+${pkgInfo.buildNumber}";
-  }
-}
-
-class _SentryQueueItem {
-  final SentryEvent event;
-  final LogRecord rec;
-
-  _SentryQueueItem({
-    @required this.event,
-    @required this.rec,
-  });
 }
