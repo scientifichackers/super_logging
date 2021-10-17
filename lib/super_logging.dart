@@ -235,6 +235,7 @@ class _SuperLogging {
       try {
         DateTime date = config.dateFmt.parse(basename(file.path));
         dates[file] = date;
+        files.add(file);
       } on FormatException {}
     }
 
@@ -247,7 +248,9 @@ class _SuperLogging {
       List<File> toDelete = files.sublist(0, extra);
 
       for (File file in toDelete) {
-        await file.delete();
+        try {
+          await file.delete();
+        } catch (ignore) {}
       }
     }
 
